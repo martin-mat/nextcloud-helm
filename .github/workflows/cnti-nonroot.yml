@@ -1,0 +1,53 @@
+name: CNTi non-root
+on:
+  push:
+    branches: [cnti-nonroot]
+permissions:
+  contents: read
+jobs:
+  cert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lfn-cnti/testsuite-action@v1
+        with:
+          version: v2.2.0
+          cnf_config: cnti-testsuite.yaml
+          log_level: info
+          install_timeout: 900
+          tests: cert
+
+  fresh-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+      - name: Install as www-data and check that Nextcloud serves
+        run: |
+          helm repo add nextcloud https://nextcloud.github.io/helm
+          helm install nc nextcloud/nextcloud --version 9.4.0 -n nc --create-namespace -f ci/cnti-nonroot.yaml --wait --timeout 15m
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- sh -c 'id; ps -o user,pid,comm 2>/dev/null | head -5 || ps aux | head -5'
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- curl -s -H "Host: nextcloud.kube.home" http://localhost/status.php
+          echo; kubectl logs -n nc deploy/nc-nextcloud -c nextcloud | grep -i -E "denied|error|fatal" | head -10 || true
+
+  upgrade-from-root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+      - name: Install with the defaults (root) on a persistent volume
+        run: |
+          helm repo add nextcloud https://nextcloud.github.io/helm
+          helm install nc nextcloud/nextcloud --version 9.4.0 -n nc --create-namespace --set persistence.enabled=true --wait --timeout 15m
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- sh -c 'id; ls -ln /var/www/html | head -20; ls -ln /var/www/html/config'
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- curl -s -H "Host: nextcloud.kube.home" http://localhost/status.php; echo
+      - name: Upgrade to www-data on the same volume
+        run: |
+          helm upgrade nc nextcloud/nextcloud --version 9.4.0 -n nc --set persistence.enabled=true -f ci/cnti-nonroot.yaml --wait --timeout 15m
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- sh -c 'id; ls -ln /var/www/html/config'
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- curl -s -H "Host: nextcloud.kube.home" http://localhost/status.php; echo
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- php occ status
+          kubectl logs -n nc deploy/nc-nextcloud -c nextcloud | grep -i -E "denied|error|fatal" | head -10 || true

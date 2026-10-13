@@ -1,0 +1,12 @@
+# Nextcloud as www-data (uid/gid 33) instead of root. Apache keeps port 80:
+# net.ipv4.ip_unprivileged_port_start is a safe, namespaced sysctl, so a
+# non-root process in the pod may bind it without NET_BIND_SERVICE.
+nextcloud:
+  podSecurityContext:
+    runAsUser: 33
+    runAsGroup: 33
+    fsGroup: 33
+    runAsNonRoot: true
+    sysctls:
+      - name: net.ipv4.ip_unprivileged_port_start
+        value: "0"
