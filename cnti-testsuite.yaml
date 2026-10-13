@@ -1,0 +1,11 @@
+---
+# CNTi Test Suite: the released Nextcloud chart with its defaults.
+config_version: "v2"
+deployments:
+  helm_charts:
+    - name: nextcloud
+      helm_repo_name: nextcloud
+      helm_repo_url: https://nextcloud.github.io/helm
+      helm_chart_name: nextcloud
+      chart_version: 9.4.0
+      namespace: nextcloud
