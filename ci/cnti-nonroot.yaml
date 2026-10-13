@@ -10,3 +10,12 @@ nextcloud:
     sysctls:
       - name: net.ipv4.ip_unprivileged_port_start
         value: "0"
+  # Kubernetes creates the data subPath owned by root with mode 0777, which
+  # www-data cannot chmod to the 0770 Nextcloud insists on ("Environment not
+  # properly prepared"); skip that check, the pod runs nothing but www-data.
+  configs:
+    datadir-permissions.config.php: |-
+      <?php
+      $CONFIG = array (
+        'check_data_directory_permissions' => false,
+      );
