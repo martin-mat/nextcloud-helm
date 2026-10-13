@@ -6,24 +6,23 @@ permissions:
   contents: read
 jobs:
   inspect:
-    strategy:
-      fail-fast: false
-      matrix:
-        persistence: ["false", "true"]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: helm/kind-action@v1
-      - name: Install as www-data and follow the first container from its start
+      - name: Root install on a PVC, then upgrade to www-data and capture why it is not Ready
         run: |
           helm repo add nextcloud https://nextcloud.github.io/helm
-          helm install nc nextcloud/nextcloud --version 9.4.0 -n nc --create-namespace -f ci/cnti-nonroot.yaml --set persistence.enabled=${{ matrix.persistence }}
-          for i in $(seq 1 120); do P=$(kubectl get pod -n nc -l app.kubernetes.io/name=nextcloud -o name | head -1); [ -n "$P" ] && kubectl logs -n nc $P -c nextcloud >/dev/null 2>&1 && break; sleep 2; done
-          timeout 240 kubectl logs -n nc -f $P -c nextcloud > first.log 2>&1 || true
-          echo "== first container, from its start"; grep -v 'GET /status.php' first.log | head -80
-          echo "== restarts and probe events"; kubectl get -n nc $P -o jsonpath='{.status.containerStatuses[0].restartCount}{"\n"}'
-          kubectl get events -n nc --field-selector involvedObject.name=${P#pod/} --sort-by=.lastTimestamp | tail -15
-          echo "== status.php body"; kubectl exec -n nc $P -c nextcloud -- curl -s -H "Host: nextcloud.kube.home" http://localhost/status.php | head -c 600; echo
-          echo "== occ status"; kubectl exec -n nc $P -c nextcloud -- php occ status 2>&1 | head -12
-          echo "== config dir"; kubectl exec -n nc $P -c nextcloud -- ls -lan /var/www/html/config
+          helm install nc nextcloud/nextcloud --version 9.4.0 -n nc --create-namespace --set persistence.enabled=true --wait --timeout 15m
+          kubectl exec -n nc deploy/nc-nextcloud -c nextcloud -- ls -lan /var/www/html/nextcloud-init-sync.lock /var/www/html/data /var/www/html | head -8
+          helm upgrade nc nextcloud/nextcloud --version 9.4.0 -n nc --set persistence.enabled=true -f ci/cnti-nonroot.yaml
+          sleep 150
+          kubectl get pods -n nc -o wide
+          P=$(kubectl get pod -n nc -l app.kubernetes.io/name=nextcloud --sort-by=.metadata.creationTimestamp -o name | tail -1)
+          echo "== new pod $P"; kubectl get -n nc $P -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.containerStatuses[0].state}{"\n"}'
+          echo "== its log"; kubectl logs -n nc $P -c nextcloud --previous 2>/dev/null | grep -v 'GET /status.php' | head -40 || true
+          kubectl logs -n nc $P -c nextcloud | grep -v 'GET /status.php' | head -40
+          echo "== events"; kubectl get events -n nc --field-selector involvedObject.name=${P#pod/} --sort-by=.lastTimestamp | tail -12
+          echo "== status.php"; kubectl exec -n nc $P -c nextcloud -- curl -s -H "Host: nextcloud.kube.home" http://localhost/status.php | head -c 400; echo
+          echo "== occ status"; kubectl exec -n nc $P -c nextcloud -- php occ status 2>&1 | head -10
