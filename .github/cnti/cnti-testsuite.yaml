@@ -1,0 +1,8 @@
+---
+# The chart in this checkout (main or the fix), with its defaults.
+config_version: "v2"
+deployments:
+  helm_dirs:
+    - name: nextcloud
+      helm_directory: ../../charts/nextcloud
+      namespace: nextcloud

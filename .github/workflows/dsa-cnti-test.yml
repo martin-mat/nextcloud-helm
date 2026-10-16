@@ -1,0 +1,49 @@
+name: CNTi dedicated service account test
+on:
+  push:
+    branches: [dsa-cnti-test]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: "main: dedicated_service_account", ref: upstream-main, tests: dedicated_service_account}
+          - {name: "fix: dedicated_service_account", ref: fix, tests: dedicated_service_account}
+          - {name: "main: service_account_mapping", ref: upstream-main, tests: service_account_mapping}
+          - {name: "fix: service_account_mapping", ref: fix, tests: service_account_mapping}
+          - {name: "fix: essential", ref: fix, tests: cert}
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Chart from ${{ matrix.ref }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.ref }}" = upstream-main ]; then
+            git remote add upstream https://github.com/nextcloud/helm.git
+            git fetch -q upstream main
+            git checkout -q upstream/main -- charts/nextcloud
+          fi
+          grep -E "^version" charts/nextcloud/Chart.yaml
+          helm repo add collabora https://collaboraonline.github.io/online
+          helm dependency build charts/nextcloud
+      - uses: lfn-cnti/testsuite-action@70536fda55fcb11f4f7463175fe9d57c86b85574 # v1.2.0
+        with:
+          version: v2.3.0
+          cnf_config: .github/cnti/cnti-testsuite.yaml
+          tests: ${{ matrix.tests }}
+          log_level: info
+          install_timeout: "900"
+          fail_on_failure: "false"
+      - name: Service accounts in use
+        if: always()
+        run: |
+          set +e
+          kubectl get sa -n nextcloud
+          kubectl get pods -n nextcloud -o custom-columns=POD:.metadata.name,SA:.spec.serviceAccountName,STATUS:.status.phase
