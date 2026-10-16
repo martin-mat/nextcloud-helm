@@ -481,3 +481,16 @@ app.kubernetes.io/managed-by: {{ .rootContext.Release.Service }}
 app.kubernetes.io/version: {{ quote . }}
 {{- end }}
 {{- end -}}
+
+{{/*
+The service account the Nextcloud pods run as: the one the chart creates,
+named after the release unless rbac.serviceaccount.name is set, or an
+existing one named in rbac.serviceaccount.name.
+*/}}
+{{- define "nextcloud.serviceAccountName" -}}
+{{- if .Values.rbac.serviceaccount.create -}}
+{{- default (include "nextcloud.fullname" .) .Values.rbac.serviceaccount.name -}}
+{{- else -}}
+{{- required "rbac.serviceaccount.name must name an existing service account when rbac.serviceaccount.create is false" .Values.rbac.serviceaccount.name -}}
+{{- end -}}
+{{- end -}}
