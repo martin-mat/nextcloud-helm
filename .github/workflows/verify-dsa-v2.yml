@@ -1,0 +1,86 @@
+# Fork only, round 3, on dsa-v2 rebased onto upstream main (same image as
+# main). (1) helm upgrade from upstream main in three install shapes, with the
+# live Deployment pod template diffed before and after. (2) CNTi on main and
+# on this branch.
+name: Verify dsa-v2
+on:
+  push:
+    branches: [dsa-v2-verify]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: defaults, values: "", pre: "", expect_sa: "nc-nextcloud", expect_roll: "yes"}
+          - {name: "rbac.enabled", values: "--set rbac.enabled=true", pre: "", expect_sa: "nextcloud-serviceaccount", expect_roll: "no"}
+          - {name: "rbac.enabled + create=false (own account)", values: "--set rbac.enabled=true --set rbac.serviceaccount.create=false", pre: "nextcloud-serviceaccount", expect_sa: "nextcloud-serviceaccount", expect_roll: "no"}
+    name: "upgrade: ${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - name: Charts from upstream main and this branch
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/nextcloud/helm.git && git fetch -q upstream main
+          echo "upstream main: $(git rev-parse --short upstream/main); this branch: $(git rev-parse --short HEAD)"
+          mkdir -p /tmp/main && git archive upstream/main charts/nextcloud | tar -x -C /tmp/main
+          helm repo add collabora https://collaboraonline.github.io/online >/dev/null
+          helm dependency build /tmp/main/charts/nextcloud >/dev/null; helm dependency build charts/nextcloud >/dev/null
+      - name: Install from main, upgrade to this branch, assert
+        env:
+          VALUES: ${{ matrix.values }}
+          PRE: ${{ matrix.pre }}
+          EXPECT_SA: ${{ matrix.expect_sa }}
+          EXPECT_ROLL: ${{ matrix.expect_roll }}
+        run: |
+          set -euo pipefail
+          ns=nc; kubectl create ns $ns
+          if [ -n "$PRE" ]; then kubectl -n $ns create sa "$PRE"; echo "pre-created account $PRE"; fi
+          tpl(){ kubectl -n $ns get deploy nc-nextcloud -o json | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d['spec']['template'],indent=1,sort_keys=True))"; }
+          helm install nc /tmp/main/charts/nextcloud -n $ns $VALUES --wait --timeout 15m
+          tpl > /tmp/tpl-before.json; kubectl -n $ns get rs -o name | sort > /tmp/rs-before
+          echo "== before (main): accounts $(kubectl -n $ns get sa -o name | tr '\n' ' ')"; kubectl -n $ns get pods -o custom-columns=POD:.metadata.name,SA:.spec.serviceAccountName,READY:.status.containerStatuses[*].ready
+          helm upgrade nc charts/nextcloud -n $ns $VALUES --wait --timeout 15m
+          tpl > /tmp/tpl-after.json; kubectl -n $ns get rs -o name | sort > /tmp/rs-after
+          echo "== after (this branch): accounts $(kubectl -n $ns get sa -o name | tr '\n' ' ')"; kubectl -n $ns get pods -o custom-columns=POD:.metadata.name,SA:.spec.serviceAccountName,READY:.status.containerStatuses[*].ready
+          echo "== live pod template diff (before -> after):"; diff /tmp/tpl-before.json /tmp/tpl-after.json && echo "  (identical)" || true
+          sa_after=$(kubectl -n $ns get deploy nc-nextcloud -o jsonpath='{.spec.template.spec.serviceAccountName}'); echo "deployment serviceAccountName after: '$sa_after' (expected '$EXPECT_SA')"; [ "$sa_after" = "$EXPECT_SA" ]
+          if cmp -s /tmp/rs-before /tmp/rs-after; then rolled=no; else rolled=yes; fi; echo "pods rolled: $rolled (expected $EXPECT_ROLL)"; [ "$rolled" = "$EXPECT_ROLL" ]
+          ready=$(kubectl -n $ns get pods -l app.kubernetes.io/name=nextcloud -o jsonpath='{.items[*].status.containerStatuses[*].ready}'); echo "ready flags: $ready"; [[ "$ready" != *false* ]]
+          kubectl -n $ns exec deploy/nc-nextcloud -- curl -s -o /dev/null -w 'nextcloud answers: %{http_code}\n' -H 'Host: nextcloud.kube.home' http://localhost/status.php || true
+  cnti:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: "main: dedicated_service_account", ref: upstream-main, tests: dedicated_service_account}
+          - {name: "dsa-v2: dedicated_service_account + essential", ref: fix, tests: "cert dedicated_service_account"}
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Chart from ${{ matrix.ref }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.ref }}" = upstream-main ]; then
+            git remote add upstream https://github.com/nextcloud/helm.git; git fetch -q upstream main; git checkout -q upstream/main -- charts/nextcloud
+          fi
+          grep -E "^(version|appVersion)" charts/nextcloud/Chart.yaml
+          helm repo add collabora https://collaboraonline.github.io/online >/dev/null; helm dependency build charts/nextcloud >/dev/null
+      - uses: lfn-cnti/testsuite-action@70536fda55fcb11f4f7463175fe9d57c86b85574 # v1.2.0
+        with:
+          version: v2.3.0
+          cnf_config: .github/cnti/cnti-testsuite.yaml
+          tests: ${{ matrix.tests }}
+          install_timeout: "900"
+          fail_on_failure: "false"
