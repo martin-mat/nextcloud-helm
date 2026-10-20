@@ -1,6 +1,8 @@
 name: Lint and Test Charts
 
 on:
+  push:
+    branches: [dsa-v2-ci]
   pull_request:
     paths:
 jobs:
