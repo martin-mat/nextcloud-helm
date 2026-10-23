@@ -1,0 +1,33 @@
+# Fork-only check for the review of nextcloud/helm#896: wrenix's `with`
+# suggestion as written, and a variant that keeps `with` with the else-if
+# chain nested; both rendered against the PR head for every combination.
+name: review-896 with-suggestion
+on:
+  push:
+    branches: [review-896-with]
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: azure/setup-helm@v4
+    - name: Render the 8 combinations of rbac.enabled x create x name
+      run: |
+        helm version --short
+        render() { # outdir
+          mkdir -p "$1"
+          for e in false true; do for c in true false; do for n in "" custom-sa; do
+            f="$1/e-$e.c-$c.n-${n:-none}.yaml"
+            if helm template rel charts/nextcloud --set rbac.enabled=$e --set rbac.serviceaccount.create=$c \
+                 --set-string rbac.serviceaccount.name="$n" > "$f" 2> "$f.err"; then :; else echo "FAILED $f: $(head -3 $f.err)"; fi
+          done; done; done
+        }
+        render out-pr
+        cp .review-896/helpers-verbatim.tpl charts/nextcloud/templates/_helpers.tpl
+        echo "== suggestion as written"; render out-verbatim
+        git checkout -- charts/nextcloud/templates/_helpers.tpl
+        cp .review-896/helpers-nested.tpl charts/nextcloud/templates/_helpers.tpl
+        echo "== with, else-if chain nested"; render out-nested
+        echo "== diff PR head vs nested (empty means identical)"; diff -r out-pr out-nested && echo IDENTICAL
+        echo "== service accounts per combination (PR head)"
+        for f in out-pr/*.yaml; do printf '%-34s %s\n' "$(basename $f .yaml)" "$(grep -h 'serviceAccountName:' $f | sort -u | tr -s ' ' | tr '\n' ' ')"; done
