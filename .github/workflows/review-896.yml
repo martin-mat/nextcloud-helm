@@ -14,6 +14,8 @@ jobs:
     - name: Render the 8 combinations of rbac.enabled x create x name
       run: |
         helm version --short
+        for r in $(yq -r '.dependencies[].repository' charts/nextcloud/Chart.yaml | sort -u | grep -E '^https?://'); do helm repo add "dep$(echo $r | md5sum | cut -c1-6)" "$r" >/dev/null; done
+        helm dependency build charts/nextcloud >/dev/null
         render() { # outdir
           mkdir -p "$1"
           for e in false true; do for c in true false; do for n in "" custom-sa; do
